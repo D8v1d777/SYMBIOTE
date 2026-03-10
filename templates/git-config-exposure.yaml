@@ -1,0 +1,20 @@
+id: git-config-exposure
+info:
+  description: Git repository configuration exposed
+  name: Git Configuration Exposure
+  severity: high
+  tags:
+  - exposure
+  - git
+requests:
+- matchers:
+  - type: word
+    words:
+    - '[core]'
+    - repositoryformatversion
+  - status:
+    - 200
+    type: status
+  method: GET
+  path:
+  - '{{BaseURL}}/.git/config'

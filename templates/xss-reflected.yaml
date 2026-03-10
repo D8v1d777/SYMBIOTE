@@ -1,0 +1,23 @@
+id: xss-reflected
+info:
+  name: Reflected Cross-Site Scripting (XSS)
+  severity: high
+  description: Reflected XSS vulnerability detected - user input is reflected in
+    the response without proper sanitization
+  tags:
+  - xss
+  - injection
+  - client-side
+requests:
+- method: GET
+  path:
+  - '{{BaseURL}}/?q=<script>alert(1)</script>'
+  - '{{BaseURL}}/search?s=<img src=x onerror=alert(1)>'
+  matchers:
+  - type: word
+    words:
+    - <script>alert(1)</script>
+    - onerror=alert(1)
+  - type: status
+    status:
+    - 200

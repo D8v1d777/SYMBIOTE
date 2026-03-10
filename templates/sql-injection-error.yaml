@@ -1,0 +1,18 @@
+id: sql-injection-error
+info:
+  description: SQL injection vulnerability detected via error messages
+  name: SQL Injection Error Based
+  severity: critical
+  tags:
+  - sqli
+  - injection
+requests:
+- matchers:
+  - regex:
+    - SQL syntax.*MySQL
+    - PostgreSQL.*ERROR
+    - Oracle.*ORA-[0-9]{5}
+    type: regex
+  method: GET
+  path:
+  - '{{BaseURL}}/{{Path}}?{{Param}}=1''"--+-'

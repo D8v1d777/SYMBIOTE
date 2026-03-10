@@ -1,0 +1,26 @@
+id: open-redirect
+info:
+  name: Open Redirect
+  severity: medium
+  description: Application allows redirect to arbitrary external URLs without validation
+  tags:
+  - redirect
+  - phishing
+  - owasp
+requests:
+- method: GET
+  path:
+  - '{{BaseURL}}/?redirect=https://evil.com'
+  - '{{BaseURL}}/logout?next=//evil.com'
+  - '{{BaseURL}}/login?return_url=https://evil.com'
+  matchers:
+  - type: word
+    words:
+    - 'Location: https://evil.com'
+    - 'Location: //evil.com'
+  - type: status
+    status:
+    - 301
+    - 302
+    - 307
+    - 308

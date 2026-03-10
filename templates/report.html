@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OmniVuln Scanner Report - {{ target }}</title>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --bg-light: #111827;
+    --bg-card: #1a2235;
+    --cyan: #00f0ff;
+    --pink: #ff006e;
+    --green: #00ff88;
+    --orange: #ff9f1c;
+    --purple: #9d00ff;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --critical: #ff0040;
+    --high: #ff6600;
+    --medium: #ffcc00;
+    --low: #00ccff;
+    --info: #00ff66;
+    --border: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Consolas', 'Courier New', monospace; padding: 40px; }
+  a { color: var(--cyan); text-decoration: none; }
+
+  /* Header */
+  .header { border-bottom: 2px solid var(--cyan); padding-bottom: 24px; margin-bottom: 40px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .logo { font-size: 2.2rem; font-weight: bold; letter-spacing: 4px; }
+  .logo span.pro { color: var(--pink); font-size: 1.4rem; margin-left: 8px; }
+  .meta { text-align: right; color: var(--text-dim); font-size: 0.85rem; line-height: 1.8; }
+  .meta .target-val { color: var(--cyan); font-size: 1rem; font-weight: bold; }
+
+  /* Stats grid */
+  .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 40px; }
+  .stat-card { background: var(--bg-card); border-radius: 8px; padding: 20px 16px; text-align: center; border-top: 3px solid; }
+  .stat-card.total  { border-color: var(--cyan); }
+  .stat-card.critical { border-color: var(--critical); }
+  .stat-card.high   { border-color: var(--high); }
+  .stat-card.medium { border-color: var(--medium); }
+  .stat-card.low    { border-color: var(--low); }
+  .stat-card .num   { font-size: 2.5rem; font-weight: bold; line-height: 1.1; }
+  .stat-card .lbl   { font-size: 0.75rem; color: var(--text-dim); margin-top: 6px; text-transform: uppercase; letter-spacing: 1px; }
+  .stat-card.total .num   { color: var(--cyan); }
+  .stat-card.critical .num { color: var(--critical); }
+  .stat-card.high .num  { color: var(--high); }
+  .stat-card.medium .num{ color: var(--medium); }
+  .stat-card.low .num   { color: var(--low); }
+
+  /* Table */
+  .section-title { font-size: 1rem; letter-spacing: 3px; color: var(--cyan); margin-bottom: 16px; padding-left: 2px; text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 48px; }
+  thead tr { background: var(--bg-card); }
+  th { padding: 12px 16px; text-align: left; font-size: 0.75rem; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 0.88rem; vertical-align: top; }
+  tr:hover td { background: var(--bg-card); }
+
+  .sev-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; letter-spacing: 1px; }
+  .sev-CRITICAL { background: rgba(255,0,64,0.2); color: var(--critical); border: 1px solid var(--critical); }
+  .sev-HIGH     { background: rgba(255,102,0,0.2); color: var(--high); border: 1px solid var(--high); }
+  .sev-MEDIUM   { background: rgba(255,204,0,0.2); color: var(--medium); border: 1px solid var(--medium); }
+  .sev-LOW      { background: rgba(0,204,255,0.2); color: var(--low); border: 1px solid var(--low); }
+  .sev-INFO     { background: rgba(0,255,102,0.15); color: var(--info); border: 1px solid var(--info); }
+
+  .vuln-title  { font-weight: bold; color: var(--text); margin-bottom: 4px; }
+  .vuln-desc   { color: var(--text-dim); font-size: 0.82rem; }
+  .target-cell { color: var(--cyan); font-size: 0.82rem; word-break: break-all; }
+  .evidence-cell { color: var(--text-dim); font-size: 0.82rem; }
+  .remed-cell  { color: var(--green); font-size: 0.82rem; }
+
+  /* Footer */
+  .footer { border-top: 1px solid var(--border); padding-top: 20px; display: flex; justify-content: space-between; color: var(--text-dim); font-size: 0.78rem; }
+  .footer .brand { color: var(--cyan); font-weight: bold; }
+
+  /* No findings */
+  .no-findings { background: var(--bg-card); border: 1px dashed var(--border); border-radius: 8px; padding: 40px; text-align: center; color: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="logo">⚡ OMNIVULN<span class="pro">PRO</span></div>
+    <div style="color:var(--text-dim); font-size:0.85rem; margin-top:6px;">Vulnerability Assessment Report</div>
+  </div>
+  <div class="meta">
+    <div>Generated: <strong>{{ generated_at }}</strong></div>
+    <div>Scan Type: <strong>{{ scan_type }}</strong></div>
+    <div>Target: <span class="target-val">{{ target }}</span></div>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+  <div class="stat-card total">
+    <div class="num">{{ stats.total }}</div>
+    <div class="lbl">Total Findings</div>
+  </div>
+  <div class="stat-card critical">
+    <div class="num">{{ stats.critical }}</div>
+    <div class="lbl">Critical</div>
+  </div>
+  <div class="stat-card high">
+    <div class="num">{{ stats.high }}</div>
+    <div class="lbl">High</div>
+  </div>
+  <div class="stat-card medium">
+    <div class="num">{{ stats.medium }}</div>
+    <div class="lbl">Medium</div>
+  </div>
+  <div class="stat-card low">
+    <div class="num">{{ stats.low }}</div>
+    <div class="lbl">Low / Info</div>
+  </div>
+</div>
+
+<!-- Findings table -->
+<div class="section-title">Vulnerability Findings</div>
+
+{% if vulnerabilities %}
+<table>
+  <thead>
+    <tr>
+      <th style="width:110px">Severity</th>
+      <th style="width:140px">ID</th>
+      <th>Title / Description</th>
+      <th>Target</th>
+      <th>Evidence</th>
+      <th>Remediation</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for v in vulnerabilities %}
+    <tr>
+      <td><span class="sev-badge sev-{{ v.severity }}">{{ v.severity }}</span></td>
+      <td style="color:var(--orange); font-size:0.8rem;">{{ v.id }}</td>
+      <td>
+        <div class="vuln-title">{{ v.title }}</div>
+        <div class="vuln-desc">{{ v.description }}</div>
+      </td>
+      <td class="target-cell">{{ v.target }}</td>
+      <td class="evidence-cell">{{ v.evidence or '—' }}</td>
+      <td class="remed-cell">{{ v.remediation or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="no-findings">✓ No vulnerabilities found for this target.</div>
+{% endif %}
+
+<div class="footer">
+  <span><span class="brand">OMNIVULN SCANNER PRO</span> — Cyberpunk Vulnerability Assessment Platform</span>
+  <span>Findings: {{ stats.total }} | Scan: {{ scan_type }}</span>
+</div>
+
+</body>
+</html>

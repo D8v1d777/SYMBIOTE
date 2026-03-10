@@ -1,0 +1,26 @@
+id: ssrf-basic
+info:
+  name: Server-Side Request Forgery (SSRF)
+  severity: critical
+  description: Potential SSRF vulnerability - application may be making server-side
+    requests to attacker-controlled URLs
+  tags:
+  - ssrf
+  - injection
+  - owasp-top10
+requests:
+- method: GET
+  path:
+  - '{{BaseURL}}/?url=http://169.254.169.254/latest/meta-data/'
+  - '{{BaseURL}}/redirect?to=http://169.254.169.254/'
+  - '{{BaseURL}}/fetch?link=http://127.0.0.1/'
+  matchers:
+  - type: word
+    words:
+    - ami-id
+    - instance-id
+    - local-hostname
+    - security-credentials
+  - type: status
+    status:
+    - 200

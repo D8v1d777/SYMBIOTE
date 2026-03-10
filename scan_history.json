@@ -1,0 +1,221 @@
+{
+  "scans": [
+    {
+      "id": 1,
+      "target": "idealcollege.edu.in",
+      "type": "network",
+      "timestamp": "2026-02-27T11:35:49.057421",
+      "findings_count": 5
+    },
+    {
+      "id": 2,
+      "target": "rtsolutions.org.in",
+      "type": "web",
+      "timestamp": "2026-02-27T11:39:19.740756",
+      "findings_count": 4
+    },
+    {
+      "id": 3,
+      "target": "example.com",
+      "type": "network",
+      "timestamp": "2026-02-27T12:41:47.011408",
+      "findings_count": 4
+    },
+    {
+      "id": 4,
+      "target": "192.168.1.9",
+      "type": "network",
+      "timestamp": "2026-02-23T04:16:56.044729",
+      "findings_count": 5
+    },
+    {
+      "id": 5,
+      "target": "idealcollege.edu.in",
+      "type": "web",
+      "timestamp": "2026-02-28T12:55:43.489297",
+      "findings_count": 0
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "scan_id": 1,
+      "id": "PORT-21",
+      "title": "Open Port: 21/ftp",
+      "severity": "INFO",
+      "category": "network",
+      "target": "15.206.173.68:21",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:35:49"
+    },
+    {
+      "scan_id": 1,
+      "id": "PORT-22",
+      "title": "Open Port: 22/ssh",
+      "severity": "INFO",
+      "category": "network",
+      "target": "15.206.173.68:22",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:35:49"
+    },
+    {
+      "scan_id": 1,
+      "id": "PORT-53",
+      "title": "Open Port: 53/dns",
+      "severity": "INFO",
+      "category": "network",
+      "target": "15.206.173.68:53",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:35:49"
+    },
+    {
+      "scan_id": 1,
+      "id": "PORT-80",
+      "title": "Open Port: 80/http",
+      "severity": "INFO",
+      "category": "network",
+      "target": "15.206.173.68:80",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:35:49"
+    },
+    {
+      "scan_id": 1,
+      "id": "PORT-443",
+      "title": "Open Port: 443/https",
+      "severity": "INFO",
+      "category": "network",
+      "target": "15.206.173.68:443",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:35:49"
+    },
+    {
+      "scan_id": 2,
+      "id": "HEADER-STR",
+      "title": "Missing HSTS",
+      "severity": "HIGH",
+      "category": "web",
+      "target": "https://rtsolutions.org.in",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:39:18"
+    },
+    {
+      "scan_id": 2,
+      "id": "HEADER-X-F",
+      "title": "Missing Clickjacking Protection",
+      "severity": "MEDIUM",
+      "category": "web",
+      "target": "https://rtsolutions.org.in",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:39:18"
+    },
+    {
+      "scan_id": 2,
+      "id": "HEADER-CON",
+      "title": "Missing CSP",
+      "severity": "MEDIUM",
+      "category": "web",
+      "target": "https://rtsolutions.org.in",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:39:18"
+    },
+    {
+      "scan_id": 2,
+      "id": "HEADER-X-C",
+      "title": "Missing MIME Sniffing Protection",
+      "severity": "MEDIUM",
+      "category": "web",
+      "target": "https://rtsolutions.org.in",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 11:39:18"
+    },
+    {
+      "scan_id": 3,
+      "id": "PORT-80",
+      "title": "Open Port: 80/http",
+      "severity": "INFO",
+      "category": "network",
+      "target": "104.18.26.120:80",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 12:41:46"
+    },
+    {
+      "scan_id": 3,
+      "id": "PORT-443",
+      "title": "Open Port: 443/https",
+      "severity": "INFO",
+      "category": "network",
+      "target": "104.18.26.120:443",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 12:41:46"
+    },
+    {
+      "scan_id": 3,
+      "id": "PORT-8080",
+      "title": "Open Port: 8080/http-proxy",
+      "severity": "INFO",
+      "category": "network",
+      "target": "104.18.26.120:8080",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 12:41:46"
+    },
+    {
+      "scan_id": 3,
+      "id": "PORT-8443",
+      "title": "Open Port: 8443/https-alt",
+      "severity": "INFO",
+      "category": "network",
+      "target": "104.18.26.120:8443",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-27 12:41:46"
+    },
+    {
+      "scan_id": 4,
+      "id": "PORT-135",
+      "title": "Open Port: 135/unknown",
+      "severity": "INFO",
+      "category": "network",
+      "target": "192.168.1.9:135",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-23 04:16:56"
+    },
+    {
+      "scan_id": 4,
+      "id": "PORT-139",
+      "title": "Open Port: 139/unknown",
+      "severity": "INFO",
+      "category": "network",
+      "target": "192.168.1.9:139",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-23 04:16:56"
+    },
+    {
+      "scan_id": 4,
+      "id": "PORT-445",
+      "title": "Open Port: 445/smb",
+      "severity": "INFO",
+      "category": "network",
+      "target": "192.168.1.9:445",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-23 04:16:56"
+    },
+    {
+      "scan_id": 4,
+      "id": "PORT-902",
+      "title": "Open Port: 902/unknown",
+      "severity": "INFO",
+      "category": "network",
+      "target": "192.168.1.9:902",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-23 04:16:56"
+    },
+    {
+      "scan_id": 4,
+      "id": "PORT-912",
+      "title": "Open Port: 912/unknown",
+      "severity": "INFO",
+      "category": "network",
+      "target": "192.168.1.9:912",
+      "cvss_score": 0.0,
+      "discovered_at": "2026-02-23 04:16:56"
+    }
+  ]
+}

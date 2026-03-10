@@ -1,0 +1,10 @@
+{
+  "shodan_key": "PB7m6eZGRs5a5UWy5X0ibEuBwMn4s3IZ",
+  "fuzz_wordlist": "",
+  "ws_port": 9999,
+  "theme": "Terminal Green",
+  "proxy": "",
+  "log_retention_days": 30,
+  "max_threads": 50,
+  "request_timeout": 10
+}

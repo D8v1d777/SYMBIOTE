@@ -1,0 +1,26 @@
+id: wordpress-login-exposed
+info:
+  name: WordPress Admin Login Exposed
+  severity: medium
+  description: WordPress admin login page is publicly accessible, enabling brute-force
+    attacks
+  tags:
+  - wordpress
+  - cms
+  - exposure
+requests:
+- method: GET
+  path:
+  - '{{BaseURL}}/wp-login.php'
+  - '{{BaseURL}}/wp-admin/'
+  - '{{BaseURL}}/wp-json/wp/v2/users'
+  matchers:
+  - type: word
+    words:
+    - WordPress
+    - wp-login
+    - user_login
+    - '"slug"'
+  - type: status
+    status:
+    - 200

@@ -1,0 +1,28 @@
+id: env-file-exposure
+info:
+  name: Environment File Exposure (.env)
+  severity: critical
+  description: .env file containing sensitive credentials and configuration is publicly
+    accessible
+  tags:
+  - exposure
+  - secrets
+  - misconfiguration
+requests:
+- method: GET
+  path:
+  - '{{BaseURL}}/.env'
+  - '{{BaseURL}}/.env.local'
+  - '{{BaseURL}}/.env.production'
+  - '{{BaseURL}}/.env.backup'
+  matchers:
+  - type: word
+    words:
+    - APP_KEY
+    - DB_PASSWORD
+    - SECRET_KEY
+    - AWS_SECRET
+    - DATABASE_URL
+  - type: status
+    status:
+    - 200

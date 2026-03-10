@@ -1,0 +1,19 @@
+id: spring-boot-actuator
+info:
+  description: Spring Boot Actuator endpoints exposed
+  name: Spring Boot Actuator Exposed
+  severity: high
+  tags:
+  - exposure
+  - spring
+requests:
+- matchers:
+  - type: word
+    words:
+    - java.version
+    - server.port
+    - status
+  method: GET
+  path:
+  - '{{BaseURL}}/actuator/env'
+  - '{{BaseURL}}/actuator/health'
